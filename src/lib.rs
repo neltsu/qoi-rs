@@ -1,22 +1,7 @@
-use image::{Rgba, RgbaImage};
-
-macro_rules! wrapping {
-    ($lhs:tt + $rhs:tt $($rest:tt)*) => {
-        wrapping!($lhs).wrapping_add(wrapping!($rhs $($rest)*))
-    };
-    ($lhs:tt - $rhs:tt $($rest:tt)*) => {
-        wrapping!($lhs).wrapping_sub(wrapping!($rhs $($rest)*))
-    };
-    ($lhs:tt * $rhs:tt $($rest:tt)*) => {
-        wrapping!(($lhs.wrapping_mul($rhs)) $($rest)*)
-    };
-    ($els:tt) => {
-        $els
-    };
-}
+use std::num::Wrapping;
 
 #[derive(Debug, Clone, Copy)]
-pub enum QoiOp {
+enum QoiOp {
     RGB { r: u8, g: u8, b: u8 },
     RGBA { r: u8, g: u8, b: u8, a: u8 },
     Index { idx: u8 },                     // 6-bit index
@@ -26,90 +11,103 @@ pub enum QoiOp {
 }
 
 impl QoiOp {
-    pub fn to_bytes(&self) -> Vec<u8> {
+    fn append_bytes(&self, buf: &mut Vec<u8>) {
         match self {
-            &QoiOp::RGB { r, g, b } => vec![0b11111110, r, g, b],
-            &QoiOp::RGBA { r, g, b, a } => vec![0b11111111, r, g, b, a],
+            &QoiOp::RGB { r, g, b } => buf.extend([0b11111110, r, g, b]),
+            &QoiOp::RGBA { r, g, b, a } => buf.extend([0b11111111, r, g, b, a]),
             &QoiOp::Index { idx } => {
                 assert!(idx <= 62);
-                vec![(0b00 << 6) | idx]
+                buf.push((0b00 << 6) | idx)
             }
             &QoiOp::Diff { dr, dg, db } => {
                 assert!(dr <= 3 && dg <= 3 && db <= 3);
-                vec![(0b01 << 6) | (dr << 4) | (dg << 2) | (db << 0)]
+                buf.push((0b01 << 6) | (dr << 4) | (dg << 2) | (db << 0))
             }
             &QoiOp::Luma { dg, dr_dg, db_dg } => {
                 assert!(dg < 64 && dr_dg < 16 && db_dg < 16);
-                vec![(0b10 << 6) | dg, (dr_dg << 4) | db_dg]
+                buf.push((0b10 << 6) | dg);
+                buf.push((dr_dg << 4) | db_dg);
             }
             &QoiOp::Run { len } => {
                 assert!(len <= 62);
-                vec![(0b11 << 6) | (len - 1)]
+                buf.push((0b11 << 6) | (len - 1))
             }
         }
     }
 
-    fn from_bytes_impl(buf: &[u8]) -> Option<(Self, &[u8])> {
+    fn from_bytes(buf: &[u8]) -> Option<(Self, &[u8])> {
         let (head, rest) = buf.split_first()?;
-        match head {
-            0b11111110 => {
+        match (head >> 6, head & 0b00111111) {
+            (0b11, 0b111110) => {
                 let (&r, rest) = rest.split_first()?;
                 let (&g, rest) = rest.split_first()?;
                 let (&b, rest) = rest.split_first()?;
                 Some((QoiOp::RGB { r, g, b }, rest))
             }
-            0b11111111 => {
+            (0b11, 0b111111) => {
                 let (&r, rest) = rest.split_first()?;
                 let (&g, rest) = rest.split_first()?;
                 let (&b, rest) = rest.split_first()?;
                 let (&a, rest) = rest.split_first()?;
                 Some((QoiOp::RGBA { r, g, b, a }, rest))
             }
-            &x if x >> 6 == 0b00 => {
-                let idx = x & 0b00111111;
+            (0b00, idx) => {
                 Some((QoiOp::Index { idx }, rest))
             }
-            &x if x >> 6 == 0b01 => {
-                let dr = (x >> 4) & 0b11;
-                let dg = (x >> 2) & 0b11;
-                let db = (x >> 0) & 0b11;
+            (0b01, data) => {
+                let dr = (data >> 4) & 0b11;
+                let dg = (data >> 2) & 0b11;
+                let db = (data >> 0) & 0b11;
                 Some((QoiOp::Diff { dr, dg, db }, rest))
             }
-            &x if x >> 6 == 0b10 => {
-                let dg = x & 0b00111111;
+            (0b10, dg) => {
                 let (next, rest) = rest.split_first()?;
-                let dr_dg = next >> 4;
-                let db_dg = next & 0b1111;
+                let dr_dg = (next >> 4) & 0b1111;
+                let db_dg = (next >> 0) & 0b1111;
                 Some((QoiOp::Luma { dg, dr_dg, db_dg }, rest))
             }
-            &x if x >> 6 == 0b11 => {
-                let len = (x & 0b00111111) + 1;
+            (0b11, len) => {
+                let len = len + 1;
                 Some((QoiOp::Run { len }, rest))
             }
-            _ => unreachable!()
-        }
-    }
-
-    pub fn from_bytes(buf: &[u8]) -> (Option<Self>, &[u8]) {
-        match Self::from_bytes_impl(buf) {
-            Some((op, rest)) => (Some(op), rest),
-            None => (None, buf),
+            (4..=u8::MAX, _) => unreachable!("(u8) >> 6 cannot be 4 or greater")
         }
     }
 }
 
-type Pixel = Rgba<u8>;
-
-fn hash(pixel: &Pixel) -> u8 {
-    // (pixel.0[0] * 3 + pixel.0[1] * 5 + pixel.0[2] * 7 + pixel.0[3] * 11) % 64
-    let &Rgba::<u8>([r, g, b, a]) = pixel;
-    (r.wrapping_mul(3).wrapping_add(
-        g.wrapping_mul(5)
-            .wrapping_add(b.wrapping_mul(7).wrapping_add(a.wrapping_mul(11))),
-    )) % 64
+#[derive(Copy, Clone, PartialEq)]
+pub struct Pixel {
+    pub r: u8,
+    pub g: u8,
+    pub b: u8,
+    pub a: u8,
+}
+pub struct Image<T> {
+    pub width: usize,
+    pub height: usize,
+    pub pixels: Vec<T>,
 }
 
-struct Encoder {
+impl Pixel {
+    pub fn new(r: u8, g: u8, b: u8, a: u8) -> Self {
+        Self { r, g, b, a }
+    }
+
+    fn hash(&self) -> u8 {
+        let &Pixel { r, g, b, a } = self;
+        let hash = (Wrapping(r) * Wrapping(3)
+                  + Wrapping(g) * Wrapping(5)
+                  + Wrapping(b) * Wrapping(7)
+                  + Wrapping(a) * Wrapping(11)) % Wrapping(64);
+        hash.0
+    }
+
+    pub fn to_bytes(&self) -> [u8; 4] {
+        [self.r, self.g, self.b, self.a]
+    }
+}
+
+pub struct Encoder {
     width: u32,
     height: u32,
     channels: u8,
@@ -119,42 +117,41 @@ struct Encoder {
 }
 
 impl Encoder {
-    fn new(width: u32, height: u32) -> Self {
+    pub fn new(width: u32, height: u32) -> Self {
         Self {
             width,
             height,
             channels: 4,
             colorspace: 0,
-            cache: [Pixel::from([0, 0, 0, 255]); 64],
-            prev: Pixel::from([0, 0, 0, 255]),
+            cache: [Pixel::new(0, 0, 0, 255); 64],
+            prev: Pixel::new(0, 0, 0, 255),
         }
     }
 
-    fn header(&self) -> Vec<u8> {
-        let mut v = vec![b'q', b'o', b'i', b'f'];
-        v.extend(self.width.to_be_bytes());
-        v.extend(self.height.to_be_bytes());
-        v.push(self.channels);
-        v.push(self.colorspace);
-        v
+    fn append_header(&self, buf: &mut Vec<u8>) {
+        buf.extend(b"qoif");
+        buf.extend(self.width.to_be_bytes());
+        buf.extend(self.height.to_be_bytes());
+        buf.push(self.channels);
+        buf.push(self.colorspace);
     }
 
-    fn encode(&mut self, img: &RgbaImage) -> Vec<u8> {
+    pub fn encode(&mut self, img: &[Pixel]) -> Vec<u8> {
         let mut buf = vec![];
 
         // header
-        buf.extend(self.header());
+        self.append_header(&mut buf);
 
         let mut is_running = false;
         let mut run_length = 0;
         let mut ops = Vec::<QoiOp>::new();
 
         // body
-        for pixel in img.pixels() {
+        for pixel in img {
             let prev = self.prev;
             self.prev = *pixel;
-            let &Rgba::<u8>([r, g, b, a]) = pixel;
-            let &Rgba::<u8>([pr, pg, pb, pa]) = &prev;
+            let &Pixel { r, g, b, a } = pixel;
+            let &Pixel { r: pr, g: pg, b: pb, a: pa } = &prev;
 
             if is_running {
                 if prev.eq(pixel) {
@@ -179,33 +176,29 @@ impl Encoder {
                 continue;
             }
 
-            let h = hash(pixel);
+            let h = pixel.hash();
 
             if self.cache[h as usize].eq(pixel) {
                 ops.push(QoiOp::Index { idx: h });
                 continue;
             }
 
-            let dr = r.wrapping_sub(pr).wrapping_add(2);
-            let dg = g.wrapping_sub(pg).wrapping_add(2);
-            let db = b.wrapping_sub(pb).wrapping_add(2);
-            let da = a.wrapping_sub(pa);
+            let Wrapping(dr) = Wrapping(r) - Wrapping(pr) + Wrapping(2);
+            let Wrapping(dg) = Wrapping(g) - Wrapping(pg) + Wrapping(2);
+            let Wrapping(db) = Wrapping(b) - Wrapping(pb) + Wrapping(2);
+            let Wrapping(da) = Wrapping(a) - Wrapping(pa);
 
             if da == 0 && 0 <= dr && dr <= 3 && 0 <= dg && dg <= 3 && 0 <= db && db <= 3 {
-                ops.push(QoiOp::Diff {
-                    dr: dr as u8,
-                    dg: dg as u8,
-                    db: db as u8,
-                });
+                ops.push(QoiOp::Diff { dr, dg, db });
                 continue;
             }
 
-            let dg = wrapping!(g - pg);
-            let dr = wrapping!(r - pr);
-            let db = wrapping!(b - pb);
-            let dr_dg = wrapping!(8u8 + dr - dg);
-            let db_dg = wrapping!(8u8 + db - dg);
-            let dg = wrapping!(32u8 + dg);
+            let Wrapping(dg) = Wrapping(g) - Wrapping(pg);
+            let Wrapping(dr) = Wrapping(r) - Wrapping(pr);
+            let Wrapping(db) = Wrapping(b) - Wrapping(pb);
+            let Wrapping(dr_dg) = Wrapping(8u8) + Wrapping(dr) - Wrapping(dg);
+            let Wrapping(db_dg) = Wrapping(8u8) + Wrapping(db) - Wrapping(dg);
+            let Wrapping(dg) = Wrapping(32u8) + Wrapping(dg);
 
             if da == 0 && 0 <= dg && dg < 64 && 0 <= dr_dg && dr_dg < 16 && 0 <= db_dg && db_dg < 16
             {
@@ -225,8 +218,7 @@ impl Encoder {
         }
 
         for op in ops {
-            // println!("Encoded op: {:?}", op);
-            buf.extend(op.to_bytes());
+            op.append_bytes(&mut buf);
         }
 
         // footer
@@ -236,7 +228,7 @@ impl Encoder {
     }
 }
 
-struct Decoder {
+pub struct Decoder {
     cache: [Pixel; 64],
     prev: Pixel,
 }
@@ -244,12 +236,12 @@ struct Decoder {
 impl Decoder {
     pub fn new() -> Self {
         Self {
-            cache: [Pixel::from([0, 0, 0, 255]); 64],
-            prev: Rgba::<u8>([0, 0, 0, 255]),
+            cache: [Pixel::new(0, 0, 0, 255); 64],
+            prev: Pixel::new(0, 0, 0, 255),
         }
     }
 
-    pub fn decode(&mut self, data: &[u8]) -> Option<RgbaImage> {
+    pub fn decode(&mut self, data: &[u8]) -> Option<Image<Pixel>> {
         // header
         let (magic, data) = data.split_at_checked(4)?;
         if !magic.eq(b"qoif") {
@@ -266,38 +258,37 @@ impl Decoder {
 
         // body
         let mut data = data;
-        let mut buf = Vec::<u8>::with_capacity((width * height * 4) as usize);
-        loop {
-            let (op, rest) = QoiOp::from_bytes(data);
-            // println!("Decoded op: {:?}", op?);
+        let mut pixels = Vec::<Pixel>::with_capacity((width * height) as usize);
+        while pixels.len() < (width * height) as usize {
+            let (op, rest) = QoiOp::from_bytes(data)?;
             let mut count: u8 = 1;
-            let pixel = match op? {
+            let pixel = match op {
                 QoiOp::RGB { r, g, b } => {
-                    let a = self.prev.0[3];
-                    Rgba::<u8>([r, g, b, a])
+                    let a = self.prev.a;
+                    Pixel::new(r, g, b, a)
                 }
                 QoiOp::RGBA { r, g, b, a } => {
-                    Rgba::<u8>([r, g, b, a])
+                    Pixel::new(r, g, b, a)
                 }
                 QoiOp::Index { idx } => {
                     *self.cache.get(idx as usize)?
                 }
                 QoiOp::Diff { dr, dg, db } => {
-                    let Rgba::<u8>([pr, pg, pb, a]) = self.prev;
-                    let r = wrapping!{ pr + dr - 2 };
-                    let g = wrapping!{ pg + dg - 2 };
-                    let b = wrapping!{ pb + db - 2 };
-                    Rgba::<u8>([r, g, b, a])
+                    let Pixel { r: pr, g: pg, b: pb, a } = self.prev;
+                    let Wrapping(r) = Wrapping(pr) + Wrapping(dr) - Wrapping(2);
+                    let Wrapping(g) = Wrapping(pg) + Wrapping(dg) - Wrapping(2);
+                    let Wrapping(b) = Wrapping(pb) + Wrapping(db) - Wrapping(2);
+                    Pixel::new(r, g, b, a)
                 }
                 QoiOp::Luma { dg, dr_dg, db_dg } => {
-                    let dg = wrapping!{ dg - 32 };
-                    let dr = wrapping!{ dr_dg + dg - 8 };
-                    let db = wrapping!{ db_dg + dg - 8 };
-                    let Rgba::<u8>([pr, pg, pb, a]) = self.prev;
-                    let r = wrapping!{ pr + dr };
-                    let g = wrapping!{ pg + dg };
-                    let b = wrapping!{ pb + db };
-                    Rgba::<u8>([r, g, b, a])
+                    let Wrapping(dg) = Wrapping(dg) - Wrapping(32);
+                    let Wrapping(dr) = Wrapping(dr_dg) + Wrapping(dg) - Wrapping(8);
+                    let Wrapping(db) = Wrapping(db_dg) + Wrapping(dg) - Wrapping(8);
+                    let Pixel { r: pr, g: pg, b: pb, a } = self.prev;
+                    let Wrapping(r) = Wrapping(pr) + Wrapping(dr);
+                    let Wrapping(g) = Wrapping(pg) + Wrapping(dg);
+                    let Wrapping(b) = Wrapping(pb) + Wrapping(db);
+                    Pixel::new(r, g, b, a)
                 }
                 QoiOp::Run { len } => {
                     count = len;
@@ -305,67 +296,73 @@ impl Decoder {
                 }
             };
             self.prev = pixel;
-            self.cache[hash(&pixel) as usize] = pixel;
-            for _ in 0..count {
-                buf.extend_from_slice(&pixel.0);
-            }
+            let h = pixel.hash();
+            self.cache[h as usize] = pixel;
             data = rest;
-            if buf.len() >= (width * height * 4) as usize {
-                break;
+
+            for _ in 0..count {
+                pixels.push(pixel);
             }
         }
 
-        // footer
-        if ![0u8, 0, 0, 0, 0, 0, 0, 1].eq(data) {
+        if pixels.len() > (width * height) as usize {
             return None;
         }
 
-        RgbaImage::from_vec(width, height, buf)
+        // footer
+        if [0u8, 0, 0, 0, 0, 0, 0, 1].ne(data) {
+            return None;
+        }
+
+        Some(Image {
+            width: width as usize,
+            height: height as usize,
+            pixels,
+        })
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use image::{Rgba, RgbaImage};
     use std::time::Instant;
 
     #[test]
-    fn test() -> Result<(), Box<dyn std::error::Error>> {
+    fn test() {
         use super::*;
 
         let now = Instant::now();
-        let img = image::ImageReader::open("assets/suz.png")?.decode()?;
+        let img = image::ImageReader::open("assets/suz.png").unwrap().decode().unwrap();
         println!("PNG decoder took {} us", now.elapsed().as_micros());
 
         let mut encoder = Encoder::new(img.width(), img.height());
 
-        let img_buf = img.as_rgba8().unwrap();
+        let img_buf = img.as_rgba8().unwrap()
+            .pixels()
+            .map(|&Rgba::<u8>([r, g, b, a])| Pixel::new(r, g, b, a))
+            .collect::<Vec<_>>();
 
         let now = Instant::now();
-        let data = encoder.encode(img_buf);
-        std::fs::write("test.qoi", &data)?;
+        let data = encoder.encode(&img_buf);
+        std::fs::write("encoded.qoi", &data).unwrap();
         println!("QOI encoder took {} us", now.elapsed().as_micros());
 
         let now = Instant::now();
-        img.save("test.png")?;
+        img.save("encoded.png").unwrap();
         println!("PNG encoder took {} us", now.elapsed().as_micros());
 
         let now = Instant::now();
         let mut decoder = Decoder::new();
-        let data = std::fs::read("test.qoi")?;
-        let decoded = decoder.decode(&data).ok_or("failed to decode")?;
+        let data = std::fs::read("encoded.qoi").unwrap();
+        let decoded = decoder.decode(&data).unwrap();
         println!("QOI decoder took {} us", now.elapsed().as_micros());
 
-        assert!(&decoded.as_raw().eq(img_buf.as_raw()));
-        decoded.save("test2.png")?;
+        assert!(decoded.pixels.eq(&img_buf));
 
-        Ok(())
-    }
-
-    #[test]
-    fn test_wrapping_macro() {
-        assert_eq!(wrapping! { 50u8 * 6u8 }, 44);
-        assert_eq!(wrapping! { 250u8 + 6u8 }, 0);
-        assert_eq!(wrapping! { 50u8 * 6u8 + 1 }, 45);
-        assert_eq!(wrapping! { 50u8 * 6u8 + 34u8 + 69u8 * 8u8 }, 118);
+        let buf = decoded.pixels.iter().flat_map(Pixel::to_bytes).collect::<Vec<_>>();
+        RgbaImage::from_vec(img.width(), img.height(), buf)
+            .unwrap()
+            .save("decoded.png")
+            .unwrap();
     }
 }

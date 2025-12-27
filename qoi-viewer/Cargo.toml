@@ -1,0 +1,10 @@
+[package]
+name = "qoi-viewer"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+qoi-rs = { path = ".." }
+winit = "0.30.12"
+softbuffer = "0.4.8"
+pixels = "0.15.0"
