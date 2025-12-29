@@ -65,18 +65,26 @@ impl ApplicationHandler for App {
                 _ => (),
             },
             WindowEvent::MouseWheel {
-                delta: MouseScrollDelta::LineDelta(_, dy),
+                delta: MouseScrollDelta::LineDelta(_, scroll_y),
                 ..
             } => {
                 let current_scaling = f32::min(
                     *self.transform.get(0).unwrap(),
                     *self.transform.get(4).unwrap(),
                 );
-                let factor = dy * 0.2 + 1.0;
+                let factor = scroll_y * 0.2 + 1.0;
                 if current_scaling < 0.02 && factor <= 1.0 {
                     return;
                 }
+
+                let (ox, oy) = self.cursor.unwrap_or_else(|| (0f64, 0f64));
+                let mut trans = Matrix2x1::new(-ox as f32, -oy as f32);
+
+                self.transform.append_translation_mut(&trans);
                 self.transform.append_scaling_mut(factor);
+                trans.neg_mut();
+                self.transform.append_translation_mut(&trans);
+
                 self.redraw();
             }
             WindowEvent::MouseInput {
@@ -103,14 +111,10 @@ impl ApplicationHandler for App {
                 let delta = Point2::new(x - prev_x, y - prev_y);
                 let trans = Matrix2x1::new(delta.x as f32, delta.y as f32);
 
-                self.transform = self.saved_transform.prepend_translation(&trans);
+                self.transform = self.saved_transform.append_translation(&trans);
                 self.redraw();
-            }
+            },
             WindowEvent::RedrawRequested => {
-                // It's preferable for applications that do not render continuously to render in
-                // this event rather than in AboutToWait, since rendering in here allows
-                // the program to gracefully handle redraws requested by the OS.
-
                 let window = self.window.as_ref().unwrap();
                 let context = self.context.as_ref().unwrap();
 
@@ -130,9 +134,6 @@ impl ApplicationHandler for App {
                 // Notify that you're about to draw.
                 window.pre_present_notify();
                 buffer.present().unwrap();
-
-                // For contiguous redraw loop you can request a redraw from here.
-                // window.request_redraw();
             }
             _ => (),
         }
@@ -168,7 +169,7 @@ fn draw_image<D: HasDisplayHandle, W: HasWindowHandle>(
 
     for y in tl.y as usize..br.y as usize {
         for x in tl.x as usize..br.x as usize {
-            // if x % 3 != 0 || y % 3 != 0 { continue; }
+            // if x % 4 + y % 4 != 0 { continue; }
 
             let pt_b = Point2::new(x as f32, y as f32);
             let pt_i = inv.transform_point(&pt_b);
