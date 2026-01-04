@@ -26,6 +26,7 @@ jobs:
       run: |
         # build library
         cargo build --release
+        cargo test --debug -- --show-output
         cargo test --release -- --show-output
         # build software renderer
         cd qoi-viewer
@@ -44,24 +45,3 @@ jobs:
           target/release/libqoi_rs.so
           target/release/qoi-viewer
           qoi-viewer-gl/qoi-viewer-gl
-
-  # release:
-  #   needs: build
-  #   runs-on: ubuntu-latest
-  #   permissions:
-  #     contents: write
-  #   steps:
-  #   - name: Download artifacts
-  #     uses: actions/download-artifact@v4
-  #     with:
-  #       name: build_output
-  #   - name: Create Release
-  #     env:
-  #       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-  #       tag: ${{ github.sha }}
-  #     run: |
-  #       gh release create "${tag:0:7}" \
-  #             main.o \
-  #             --repo="$GITHUB_REPOSITORY" \
-  #             --title="${GITHUB_REPOSITORY#*/} ${tag:0:7}" \
-  #             --generate-notes
