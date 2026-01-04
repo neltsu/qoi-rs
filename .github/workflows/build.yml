@@ -26,7 +26,7 @@ jobs:
       run: |
         # build library
         cargo build --release
-        cargo test --debug -- --show-output
+        cargo test -- --show-output
         cargo test --release -- --show-output
         # build software renderer
         cd qoi-viewer
