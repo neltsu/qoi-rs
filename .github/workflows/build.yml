@@ -19,6 +19,7 @@ jobs:
         sudo apt install libx11-dev
         sudo apt install libxcursor-dev
         sudo apt install libxrandr-dev
+        sudo apt install libxi-dev
     - name: Build
       run: |
         cargo build --release
