@@ -24,7 +24,13 @@ jobs:
           libgl-dev
     - name: Build
       run: |
+        # build library
         cargo build --release
+        cargo test -- --show-output
+        # build software renderer
+        cd qoi-viewer
+        cargo build --release
+        # build opengl renderer
         cd qoi-viewer-gl
         cc -o qoi-viewer-gl main.c -lGL -lX11 -lXrandr -L../target/release -l:libqoi_rs.a
     - name: Upload artifacts
@@ -32,6 +38,9 @@ jobs:
       with:
         name: build_output
         path: |
+          target/release/libqoi_rs.a
+          target/release/libqoi_rs.so
+          target/release/qoi-viewer
           qoi-viewer-gl/qoi-viewer-gl
 
   # release:
