@@ -28,17 +28,17 @@ jobs:
         cargo build --release
         cargo test --release -- --show-output
         # build software renderer
-        cd ./qoi-viewer
+        cd qoi-viewer
         cargo build --release
         cd ..
         # build opengl renderer
-        cd ./qoi-viewer-gl
+        cd qoi-viewer-gl
         cc -o qoi-viewer-gl main.c -lGL -lX11 -lXrandr -L../target/release -l:libqoi_rs.a
-        cd..
+        cd ..
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: build_output
+        name: linux_artifacts
         path: |
           target/release/libqoi_rs.a
           target/release/libqoi_rs.so
