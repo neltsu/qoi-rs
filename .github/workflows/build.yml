@@ -33,7 +33,7 @@ jobs:
         cd ..
         # build opengl renderer
         cd qoi-viewer-gl
-        cc -o qoi-viewer-gl main.c -lGL -lX11 -lXrandr -L../target/release -l:libqoi_rs.a
+        cc -o qoi-viewer-gl main.c -lGL -lX11 -lXrandr -L../target/debug -l:libqoi_rs.a
         cd ..
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
