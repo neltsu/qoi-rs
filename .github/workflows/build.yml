@@ -14,6 +14,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
+    - name: Install required software
+      run: |
+        apt install libx11-dev
     - name: Build
       run: |
         cargo build --release
