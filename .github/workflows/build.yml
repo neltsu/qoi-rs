@@ -22,6 +22,7 @@ jobs:
           libxrandr-dev     \
           libxi-dev         \
           libgl-dev
+        rustup target add wasm32-unknown-unknown
     - name: Build
       run: |
         # build library
