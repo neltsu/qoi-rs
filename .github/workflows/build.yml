@@ -35,6 +35,7 @@ jobs:
         cd ..
         # build opengl renderer
         cd qoi-viewer-gl
+        wget 'https://raw.githubusercontent.com/ColleagueRiley/RGFW/refs/heads/main/RGFW.h'
         cc -o qoi-viewer-gl main.c -lGL -lX11 -lXrandr -L../target/debug -l:libqoi_rs.a
         cd ..
     - name: Upload artifacts

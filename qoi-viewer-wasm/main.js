@@ -1,5 +1,5 @@
 async function main() {
-    const blob = await fetch("qoi_rs_1.wasm");
+    const blob = await fetch("qoi_rs.wasm");
     if (!blob.ok) throw new Error(`Failed to fetch WASM: ${blob.statusText}`);
     const module = await WebAssembly.instantiateStreaming(blob);
     const wasm = module.instance.exports;
